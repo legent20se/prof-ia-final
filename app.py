@@ -1,3 +1,26 @@
+import sys
+
+# Patch pour Python 3.13 (indispensable pour streamlit-mic-recorder)
+try:
+    import audioop
+except ImportError:
+    import audioop_lts as audioop
+    sys.modules["audioop"] = audioop
+
+try:
+    import aifc
+except ImportError:
+    import standard_aifc as aifc
+    sys.modules["aifc"] = aifc
+
+# Maintenant tu peux importer le reste
+import streamlit as st
+import google.generativeai as genai
+# ... le reste de ton code
+
+
+
+
 import streamlit as st
 import google.generativeai as genai
 from elevenlabs.client import ElevenLabs
