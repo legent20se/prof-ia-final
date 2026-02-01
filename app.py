@@ -1,17 +1,27 @@
 import sys
 import os
 
-# --- PATCH CRITIQUE POUR PYTHON 3.13 (À laisser en haut) ---
+
+# --- PATCH POUR PYTHON 3.13 (À mettre AVANT tout le reste) ---
 try:
     import audioop
 except ImportError:
-    import audioop_lts as audioop
-    sys.modules["audioop"] = audioop
+    try:
+        import audioop_lts as audioop
+        sys.modules["audioop"] = audioop
+    except ImportError:
+        pass # Sera géré par Streamlit si manquant
+
 try:
     import aifc
 except ImportError:
-    import standard_aifc as aifc
-    sys.modules["aifc"] = aifc
+    try:
+        import standard_aifc as aifc
+        sys.modules["aifc"] = aifc
+    except ImportError:
+        pass
+# -----------------------------------------------------------
+
 
 import streamlit as st
 import google.generativeai as genai

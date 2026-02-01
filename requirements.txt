@@ -4,3 +4,5 @@ elevenlabs
 PyPDF2
 python-dotenv
 streamlit-mic-recorder
+audioop-lts
+standard-aifc
