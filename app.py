@@ -1,53 +1,36 @@
 import sys
+import os
 
-# Patch pour Python 3.13 (indispensable pour streamlit-mic-recorder)
+# --- PATCH CRITIQUE POUR PYTHON 3.13 (À laisser en haut) ---
 try:
     import audioop
 except ImportError:
     import audioop_lts as audioop
     sys.modules["audioop"] = audioop
-
 try:
     import aifc
 except ImportError:
     import standard_aifc as aifc
     sys.modules["aifc"] = aifc
 
-# Maintenant tu peux importer le reste
-import streamlit as st
-import google.generativeai as genai
-# ... le reste de ton code
-
-
-
-
 import streamlit as st
 import google.generativeai as genai
 from elevenlabs.client import ElevenLabs
 from PyPDF2 import PdfReader
-from streamlit_mic_recorder import mic_recorder
 
-# --- CONFIGURATION INITIALE ---
-st.set_page_config(page_title="Professeur IA", layout="wide")
+# --- CONFIGURATION ---
+st.set_page_config(page_title="Professeur IA Virtuel", layout="wide")
 
-# --- VÉRIFICATION DES SECRETS (ANTI-CRASH) ---
-if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("ERREUR CRITIQUE : La clé GOOGLE_API_KEY est manquante dans les Secrets.")
-    st.stop()
-if "ELEVENLABS_API_KEY" not in st.secrets:
-    st.error("ERREUR CRITIQUE : La clé ELEVENLABS_API_KEY est manquante dans les Secrets.")
-    st.stop()
+# Récupération des clés dans les Secrets Streamlit
+GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
+ELEVENLABS_API_KEY = st.secrets["ELEVENLABS_API_KEY"]
+VOICE_ID = st.secrets["ELEVENLABS_VOICE_ID"]
 
-# --- INITIALISATION DES CLIENTS ---
-try:
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    client_eleven = ElevenLabs(api_key=st.secrets["ELEVENLABS_API_KEY"])
-    VOICE_ID = st.secrets.get("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM") # Une voix par défaut si la tienne manque
-except Exception as e:
-    st.error(f"Erreur de connexion aux API : {e}")
-    st.stop()
+genai.configure(api_key=GOOGLE_API_KEY)
+client_eleven = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 
 # --- FONCTIONS ---
+
 def get_pdf_text(pdf_docs):
     text = ""
     for pdf in pdf_docs:
@@ -56,108 +39,74 @@ def get_pdf_text(pdf_docs):
             text += page.extract_text() or ""
     return text
 
-def get_ai_response(messages, context):
+def process_interaction(user_input, context, is_audio=False):
+    """Envoie le texte ou l'audio à Gemini et récupère la réponse"""
     model = genai.GenerativeModel('gemini-1.5-flash')
     
-    system_instruction = f"""
-    Tu es un professeur expert en lycée (NSI, Maths, STI2D).
-    Tu dois répondre de manière pédagogique, encourageante et concise (pour l'audio).
-    Utilise IMPÉRATIVEMENT le contexte suivant pour répondre si possible :
-    ---
-    {context[:100000]}
-    ---
-    Si la réponse n'est pas dans le contexte, utilise tes connaissances générales.
-    """
+    prompt = f"Tu es un prof expert. Utilise ce contexte pour répondre : {context[:50000]}"
     
-    # On transforme l'historique pour Gemini
-    gemini_history = [{"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]} for m in messages]
+    if is_audio:
+        # Gemini peut recevoir une liste [texte, données_audio]
+        response = model.generate_content([prompt, user_input])
+    else:
+        response = model.generate_content(prompt + "\n\nQuestion : " + user_input)
     
-    # On ajoute l'instruction système manuellement pour ce modèle simple
-    full_prompt = system_instruction + "\n\nDiscussion actuelle:\n" + str(gemini_history)
-    
-    response = model.generate_content(full_prompt)
     return response.text
 
-def generate_audio(text):
-    try:
-        audio = client_eleven.generate(
-            text=text,
-            voice=VOICE_ID,
-            model="eleven_multilingual_v2"
-        )
-        return b"".join(audio)
-    except Exception as e:
-        st.warning(f"Impossible de générer l'audio (Crédits épuisés ?): {e}")
-        return None
+def play_voice(text):
+    """Génère l'audio avec ta voix ElevenLabs"""
+    audio = client_eleven.generate(
+        text=text,
+        voice=VOICE_ID,
+        model="eleven_multilingual_v2"
+    )
+    return b"".join(audio)
 
 # --- INTERFACE ---
-st.title("🎓 Professeur Seb - NSI & Maths")
+st.title("🎓 Mon Assistant  (NSI/Maths)")
 
-# Sidebar : Base de connaissances
+# 1. Gestion des fichiers PDF (La base de connaissances)
 with st.sidebar:
-    st.header("📂 Vos Cours")
-    uploaded_files = st.file_uploader("Déposez vos PDF de cours ici", accept_multiple_files=True, type=['pdf'])
-    
+    st.header("📚 Tes documents de cours")
+    uploaded_files = st.file_uploader("Upload tes PDF", accept_multiple_files=True, type=['pdf'])
     if uploaded_files:
-        if st.button("🧠 Analyser et Mémoriser"):
-            with st.spinner("Lecture des cours en cours..."):
-                raw_text = get_pdf_text(uploaded_files)
-                st.session_state['context'] = raw_text
-                st.success(f"Cours intégrés ! ({len(raw_text)} caractères)")
+        if st.button("Analyser les documents"):
+            st.session_state['context'] = get_pdf_text(uploaded_files)
+            st.success("Cours mémorisés !")
 
-# État de la session
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "context" not in st.session_state:
+if 'context' not in st.session_state:
     st.session_state['context'] = ""
 
-# Affichage de l'historique
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.write(msg["content"])
-        if "audio" in msg:
-            st.audio(msg["audio"], format="audio/mp3")
-
-# ZONE D'ENTRÉE (MICRO OU TEXTE)
-st.write("---")
-col1, col2 = st.columns([1, 4])
+# 2. Entrée de l'élève (Audio ou Texte)
+st.write("### Pose ta question au prof")
+col1, col2 = st.columns(2)
 
 with col1:
-    st.write("🎤 Parler")
-    audio_input = mic_recorder(start_prompt="🔴", stop_prompt="⬛", just_once=True, key='recorder')
+    # Nouveau composant natif de Streamlit (très stable)
+    audio_file = st.audio_input("🎤 Parle au prof")
 
-user_text = st.chat_input("Écrivez votre question...")
+with col2:
+    text_input = st.chat_input("Ou écris ta question ici...")
 
-final_input = None
+# 3. Logique de réponse
+user_content = None
+is_audio_input = False
 
-# Logique de détection d'entrée
-if user_text:
-    final_input = user_text
-elif audio_input and 'bytes' in audio_input:
-    # Note: Pour transcrire l'audio utilisateur vers texte, il faudrait Whisper.
-    # Pour simplifier et éviter les erreurs de quota, on demande à l'élève d'écrire
-    # ou on simule (ici on prend le texte s'il existe).
-    st.info("🎙️ Audio reçu (Transcription Whisper nécessaire pour la V2). Écrivez votre question pour l'instant.")
+if audio_file:
+    # On prépare l'audio pour Gemini
+    user_content = {"mime_type": "audio/wav", "data": audio_file.read()}
+    is_audio_input = True
+elif text_input:
+    user_content = text_input
+    is_audio_input = False
 
-if final_input:
-    # 1. Ajout message utilisateur
-    st.session_state.messages.append({"role": "user", "content": final_input})
-    with st.chat_message("user"):
-        st.write(final_input)
-
-    # 2. Réponse IA
-    if st.session_state['context'] == "":
-        st.warning("⚠️ Attention : Aucun cours chargé. Je réponds avec mes connaissances générales.")
-    
-    with st.chat_message("assistant"):
-        with st.spinner("Réflexion..."):
-            ai_msg = get_ai_response(st.session_state.messages, st.session_state['context'])
-            st.write(ai_msg)
-            
-            # 3. Génération Voix Prof
-            audio_bytes = generate_audio(ai_msg)
-            if audio_bytes:
-                st.audio(audio_bytes, format="audio/mp3", autoplay=True)
-                st.session_state.messages.append({"role": "assistant", "content": ai_msg, "audio": audio_bytes})
-            else:
-                st.session_state.messages.append({"role": "assistant", "content": ai_msg})
+if user_content:
+    with st.spinner("Le prof réfléchit..."):
+        # Génération de la réponse texte
+        answer = process_interaction(user_content, st.session_state['context'], is_audio=is_audio_input)
+        
+        st.chat_message("assistant").write(answer)
+        
+        # Génération de ta voix
+        voice_bytes = play_voice(answer)
+        st.audio(voice_bytes, format="audio/mp3", autoplay=True)
