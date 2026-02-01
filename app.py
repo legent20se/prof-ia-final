@@ -1,122 +1,134 @@
-import sys
-import os
-
-
-# --- PATCH POUR PYTHON 3.13 (À mettre AVANT tout le reste) ---
-try:
-    import audioop
-except ImportError:
-    try:
-        import audioop_lts as audioop
-        sys.modules["audioop"] = audioop
-    except ImportError:
-        pass # Sera géré par Streamlit si manquant
-
-try:
-    import aifc
-except ImportError:
-    try:
-        import standard_aifc as aifc
-        sys.modules["aifc"] = aifc
-    except ImportError:
-        pass
-# -----------------------------------------------------------
-
-
 import streamlit as st
 import google.generativeai as genai
 from elevenlabs.client import ElevenLabs
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 
-# --- CONFIGURATION ---
-st.set_page_config(page_title="Professeur IA Virtuel", layout="wide")
+# --- CONFIGURATION DE LA PAGE ---
+st.set_page_config(
+    page_title="Professeur IA Virtuel",
+    page_icon="🎓",
+    layout="wide"
+)
 
-# Récupération des clés dans les Secrets Streamlit
-GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
-ELEVENLABS_API_KEY = st.secrets["ELEVENLABS_API_KEY"]
-VOICE_ID = st.secrets["ELEVENLABS_VOICE_ID"]
+# --- RÉCUPÉRATION DES SECRETS ---
+try:
+    GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
+    ELEVENLABS_API_KEY = st.secrets["ELEVENLABS_API_KEY"]
+    VOICE_ID = st.secrets["ELEVENLABS_VOICE_ID"]
+except KeyError as e:
+    st.error(f"Erreur : La clé {e} est manquante dans les Secrets Streamlit.")
+    st.stop()
 
+# Initialisation des clients API
 genai.configure(api_key=GOOGLE_API_KEY)
 client_eleven = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 
-# --- FONCTIONS ---
+# --- FONCTIONS TECHNIQUES ---
 
 def get_pdf_text(pdf_docs):
+    """Extrait le texte de tous les fichiers PDF téléchargés."""
     text = ""
     for pdf in pdf_docs:
-        reader = PdfReader(pdf)
-        for page in reader.pages:
-            text += page.extract_text() or ""
+        try:
+            reader = PdfReader(pdf)
+            for page in reader.pages:
+                content = page.extract_text()
+                if content:
+                    text += content + "\n"
+        except Exception as e:
+            st.error(f"Erreur lors de la lecture d'un PDF : {e}")
     return text
 
 def process_interaction(user_input, context, is_audio=False):
-    """Envoie le texte ou l'audio à Gemini et récupère la réponse"""
+    """Envoie la requête (audio ou texte) à Gemini avec le contexte du cours."""
     model = genai.GenerativeModel('gemini-1.5-flash')
     
-    prompt = f"Tu es un prof expert. Utilise ce contexte pour répondre : {context[:50000]}"
+    # Consigne pédagogique pour l'IA
+    system_instruction = (
+        "Tu es un professeur expert en NSI et Mathématiques. "
+        "Réponds de manière claire, concise et pédagogique. "
+        f"Utilise ce contexte de cours pour tes réponses : \n\n{context[:50000]}"
+    )
     
     if is_audio:
-        # Gemini peut recevoir une liste [texte, données_audio]
-        response = model.generate_content([prompt, user_input])
+        # Gemini 1.5 Flash traite l'audio nativement
+        response = model.generate_content([system_instruction, user_input])
     else:
-        response = model.generate_content(prompt + "\n\nQuestion : " + user_input)
+        response = model.generate_content(f"{system_instruction}\n\nQuestion de l'élève : {user_input}")
     
     return response.text
 
 def play_voice(text):
-    """Génère l'audio avec ta voix ElevenLabs"""
-    audio = client_eleven.generate(
-        text=text,
-        voice=VOICE_ID,
-        model="eleven_multilingual_v2"
-    )
-    return b"".join(audio)
+    """Génère la synthèse vocale avec ton clone ElevenLabs."""
+    try:
+        audio = client_eleven.generate(
+            text=text,
+            voice=VOICE_ID,
+            model="eleven_multilingual_v2"
+        )
+        return b"".join(audio)
+    except Exception as e:
+        st.warning(f"Note : La synthèse vocale a échoué (vérifie tes crédits ElevenLabs). Erreur : {e}")
+        return None
 
-# --- INTERFACE ---
-st.title("🎓 Mon Assistant  (NSI/Maths)")
+# --- INTERFACE UTILISATEUR (UI) ---
 
-# 1. Gestion des fichiers PDF (La base de connaissances)
+st.title("🎓 Assistant Professeur IA")
+st.info("Posez vos questions par écrit ou au micro. Je vous répondrai avec ma propre voix en m'appuyant sur vos cours.")
+
+# Barre latérale pour charger les cours
 with st.sidebar:
-    st.header("📚 Tes documents de cours")
-    uploaded_files = st.file_uploader("Upload tes PDF", accept_multiple_files=True, type=['pdf'])
+    st.header("📚 Documents de cours")
+    uploaded_files = st.file_uploader(
+        "Déposez vos PDF ici", 
+        accept_multiple_files=True, 
+        type=['pdf']
+    )
+    
     if uploaded_files:
-        if st.button("Analyser les documents"):
-            st.session_state['context'] = get_pdf_text(uploaded_files)
-            st.success("Cours mémorisés !")
+        if st.button("🧠 Mémoriser les cours"):
+            with st.spinner("Analyse des documents en cours..."):
+                st.session_state['context'] = get_pdf_text(uploaded_files)
+                st.success(f"Cours intégrés ({len(st.session_state['context'])} caractères) !")
 
+# Initialisation du contexte dans la session
 if 'context' not in st.session_state:
     st.session_state['context'] = ""
 
-# 2. Entrée de l'élève (Audio ou Texte)
-st.write("### Pose ta question au prof")
-col1, col2 = st.columns(2)
+# Zone d'interaction
+st.divider()
+col_mic, col_text = st.columns([1, 2])
 
-with col1:
-    # Nouveau composant natif de Streamlit (très stable)
-    audio_file = st.audio_input("🎤 Parle au prof")
+with col_mic:
+    # Composant natif pour l'enregistrement audio
+    audio_data = st.audio_input("🎤 Parler au professeur")
 
-with col2:
-    text_input = st.chat_input("Ou écris ta question ici...")
+with col_text:
+    # Entrée texte classique
+    text_data = st.chat_input("Ou écrivez votre question ici...")
 
-# 3. Logique de réponse
+# Logique de traitement des entrées
 user_content = None
 is_audio_input = False
 
-if audio_file:
-    # On prépare l'audio pour Gemini
-    user_content = {"mime_type": "audio/wav", "data": audio_file.read()}
+if audio_data:
+    user_content = {"mime_type": "audio/wav", "data": audio_data.read()}
     is_audio_input = True
-elif text_input:
-    user_content = text_input
+elif text_data:
+    user_content = text_data
     is_audio_input = False
 
+# Génération et affichage de la réponse
 if user_content:
-    with st.spinner("Le prof réfléchit..."):
-        # Génération de la réponse texte
+    with st.spinner("Réflexion..."):
+        # 1. Obtenir la réponse de l'IA
         answer = process_interaction(user_content, st.session_state['context'], is_audio=is_audio_input)
         
-        st.chat_message("assistant").write(answer)
+        # 2. Afficher la réponse écrite
+        with st.chat_message("assistant"):
+            st.write(answer)
         
-        # Génération de ta voix
-        voice_bytes = play_voice(answer)
-        st.audio(voice_bytes, format="audio/mp3", autoplay=True)
+        # 3. Générer et jouer l'audio
+        audio_bytes = play_voice(answer)
+        if audio_bytes:
+            st.audio(audio_bytes, format="audio/mp3", autoplay=True)
