@@ -1,0 +1,6 @@
+streamlit
+google-generativeai
+elevenlabs
+PyPDF2
+python-dotenv
+streamlit-mic-recorder
